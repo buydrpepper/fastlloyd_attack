@@ -24,6 +24,7 @@ from configs import Params, exp_parameter_dict, num_clusters
 from configs.defaults import accuracy_datasets
 from data_io import shuffle_and_split, unscale, load_txt, normalize
 from utils import evaluate, mean_confidence_interval, plot_clusters
+from utils.protocols import project_last_proto
 
 
 class ExperimentRunner:
@@ -73,7 +74,7 @@ class ExperimentRunner:
         self.failed_experiments = []
         # TODO: make eval metrics = nicv to save time
         self.eval_metrics = "all" if exp_type == "accuracy" or dataset in accuracy_datasets else "nicv"
-        # self.eval_metrics = "nicv"
+        #self.eval_metrics = "nicv"
 
         values_unscaled = unscale(self.values.copy())
         self.centroids_gt = KMeans(n_clusters=k).fit(values_unscaled).cluster_centers_
@@ -126,14 +127,52 @@ class ExperimentRunner:
         plt.savefig(folder / f"{filename}.png")
         plt.close()
 
+    # def _get_parameter_combinations(self) -> Generator[Params, None, None]:
+    #     """Generate all parameter combinations for experiments."""
+    #     params_order = ["methods", "posts", "delays", "dps"]
+    #     dimension, data_size = self.values.shape[1], self.values.shape[0]
+    #
+    #     for method, post, delay, dp in itertools.product(
+    #             *[self.params_list[key] for key in params_order]
+    #     ):
+    #         for eps_budget in self._get_eps_budgets(dp):
+    #             params = Params(
+    #                 num_clients=self.params_list["num_clients"],
+    #                 k=self.k,
+    #                 dim=dimension,
+    #                 data_size=data_size,
+    #                 dp=dp,
+    #                 eps=eps_budget,
+    #                 method=method,
+    #                 post=post,
+    #                 delay=delay,
+    #             )
+    #
+    #             if method == "none":
+    #                 params.alpha = 0
+    #                 yield params
+    #             else:
+    #                 for alpha in self.params_list["alphas"]:
+    #                     params.alpha = alpha
+    #                     yield params
+
+
+    #Only use Lloyd and FastLloyd - Dennis
     def _get_parameter_combinations(self) -> Generator[Params, None, None]:
-        """Generate all parameter combinations for experiments."""
-        params_order = ["methods", "posts", "delays", "dps"]
+        """Only generates Lloyd and FastLloyd, with different eps"""
         dimension, data_size = self.values.shape[1], self.values.shape[0]
 
-        for method, post, delay, dp in itertools.product(
-                *[self.params_list[key] for key in params_order]
-        ):
+        #order: method, dp, post
+
+        hardcoded=[ ["none", "none", "none"],
+                   ["diagonal_then_frac", "gaussiananalytic", "fold"],
+                   #["diagonal_then_frac", "averagelast", "fold"],
+                   #["diagonal_then_frac", "project", "fold"],
+                   #["diagonal_then_frac", "projectlast", "fold"],
+                   ["diagonal_then_frac", "nofinalnoise", "fold"],
+                   ]
+
+        for method, dp, post in hardcoded:
             for eps_budget in self._get_eps_budgets(dp):
                 params = Params(
                     num_clients=self.params_list["num_clients"],
@@ -144,7 +183,7 @@ class ExperimentRunner:
                     eps=eps_budget,
                     method=method,
                     post=post,
-                    delay=delay,
+                    delay=0,
                 )
 
                 if method == "none":
@@ -253,8 +292,100 @@ class ExperimentRunner:
     def run(self) -> None:
         """Run all experiments with different parameter combinations."""
         for params in self._get_parameter_combinations():
-            self.run_experiment(params)
 
+            if getattr(params, 'dp') != "gaussiananalytic" and getattr(params, 'dp') != "lapalace" and getattr(params,'dp') != "none":
+                self.run_custom_fastlloyd(params)
+            else:
+                self.run_experiment(params)
+
+
+    def run_custom_fastlloyd(self, params) -> None:
+        """Run experiment with given parameters multiple times."""
+        #sets attribute for correct calculation
+        patt = getattr(params, 'dp')
+        setattr(params, 'dp', "gaussiananalytic")
+        params.calculate_iters()
+
+        setattr(params, 'dp', patt)
+        total_metrics = defaultdict(list)
+        successful_experiments = experiment_count = 0
+
+        # Run multiple times with different seeds
+        for seed in self.params_list["seeds"]:
+            params.seed = seed
+            try:
+                metrics = self.run_custom_protocol(params)
+
+                for metric, value in metrics.items():
+                    total_metrics[metric].append(value)
+
+                failed = any(np.isnan(value) for value in metrics.values())
+                successful_experiments += 1 if not failed else 0
+                experiment_count += 1
+
+            except Exception as e:
+                print(f"Experiment failed: {str(e)}")
+                self.failed_experiments.append(vars(params))
+                self._save_results()
+
+        # Process and save results
+        #params attribute should be reset
+        self._process_and_save_results(
+            params, total_metrics, successful_experiments, experiment_count
+        )
+
+    def run_custom_protocol(self, params: Params) -> Dict[str, float]:
+        """
+        Run a single instance of the clustering protocol.
+
+        Args:
+            params: Parameters for this protocol run
+
+        Returns:
+            Dictionary of evaluation metrics
+        """
+
+        patt = getattr(params, 'dp')
+        setattr(params, 'dp', "gaussiananalytic")
+
+
+        # Prepare data
+        proportions = np.ones(params.num_clients) / params.num_clients
+        value_lists = shuffle_and_split(self.values, params.num_clients, proportions)
+
+        from utils.protocols import projection_proto, average_last_proto, no_final_noise
+        protocol = self.protocol
+
+        if patt == "averagelast":
+            protocol = average_last_proto
+        if patt == "project":
+            protocol = projection_proto
+        if patt == "projectlast":
+            protocol=project_last_proto
+        if patt == "nofinalnoise":
+            protocol=no_final_noise
+
+        # Run protocol and time it
+        start = timer()
+        centroids, unassigned = protocol(value_lists, params)
+        elapsed_time = timer() - start
+
+        # reset dp attribute. The data, starting here, should not depend on it 
+        setattr(params, 'dp', patt)
+
+        # Handle scaling
+        values_unscaled = unscale(self.values.copy()) if params.fixed else self.values
+        centroids_final = unscale(centroids) if params.fixed else centroids
+        # Evaluate results
+        metrics = evaluate(centroids_final, values_unscaled, self.centroids_gt, self.eval_metrics)
+        metrics["elapsed"] = elapsed_time
+        metrics["unassigned"] = unassigned
+
+        # Generate plots if requested
+        if self.plot:
+            self._generate_plot(centroids_final, values_unscaled, params)
+
+        return metrics
 
 def parse_args() -> Namespace:
     """Parse command line arguments."""
@@ -333,6 +464,8 @@ def main() -> None:
         "fixed": fixed,
     }
 
+
+
     # Override parameters if needed
     if exp_type in exp_parameter_dict:
         params_list.update(exp_parameter_dict[exp_type])
@@ -353,7 +486,9 @@ def main() -> None:
         params_list["num_clients"] = 2
 
     # Run experiments in parallel
-    max_processes = min(os.cpu_count()-16 or 1, len(params_list["datasets"]))
+
+    #EDIT: change 16 free cores to 1- Dennis
+    max_processes = min(os.cpu_count()-1 or 1, len(params_list["datasets"]))
     if "timing" in exp_type:
         max_processes = 1
     if max_processes > 1:

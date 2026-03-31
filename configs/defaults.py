@@ -54,7 +54,6 @@ timing_parameters = {
     "delays": [0.000125, 0.025],  # Communication delays
     "datasets": timing_datasets,  # Datasets to use
 }
-
 acc_parameters = {
     "dps": ["none", "laplace", "gaussiananalytic"],  # Privacy mechanisms
     "methods": ["none", "diagonal_then_frac"],  # Constraint methods
@@ -62,6 +61,7 @@ acc_parameters = {
     "posts": ["none", "fold"],  # Post-processing methods
     "datasets": accuracy_datasets,  # Datasets to use
 }
+
 
 scale_parameters = {
     "dps": ["none", "laplace", "gaussiananalytic"],  # Privacy mechanisms

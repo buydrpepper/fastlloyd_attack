@@ -79,6 +79,10 @@ CONFIG = {
         ("none", "gaussiananalytic", "none"): "GLloyd",
         ("none", "none", "none"): "Lloyd",
         ("diagonal_then_frac", "gaussiananalytic", "fold"): "FastLloyd",
+        ("diagonal_then_frac", "averagelast", "fold"): "AvgLast",
+        ("diagonal_then_frac", "project", "fold"): "Project",
+        ("diagonal_then_frac", "projectlast", "fold"): "ProjectLast",
+        ("diagonal_then_frac", "nofinalnoise", "fold"): "NoFinalNoise",
 
     },
     "method_colors": {
@@ -86,6 +90,10 @@ CONFIG = {
         ("none", "none", "none"): "black",
         ("none", "gaussiananalytic", "none"): "orange",
         ("diagonal_then_frac", "gaussiananalytic", "fold"): "green",
+        ("diagonal_then_frac", "averagelast", "fold"): "blue",
+        ("diagonal_then_frac", "project", "fold"): "red",
+        ("diagonal_then_frac", "projectlast", "fold"): "pink",
+        ("diagonal_then_frac", "nofinalnoise", "fold"): "orange",
     },
     'datasets_folders': [
         "submission/accuracy"

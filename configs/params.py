@@ -39,7 +39,7 @@ class Params:
         MIN_ITERATIONS (int): Minimum required iterations (2)
     """
 
-    seed: int = 1337
+    seed: int = 1336
     data_size: int = 1000
     dim: int = 2
     k: int = 15
@@ -57,7 +57,7 @@ class Params:
 
     DEFAULT_BOUNDS = (-1, 1)
     MAX_RETRIES = 100
-    MAX_ITERATIONS = 7
+    MAX_ITERATIONS =  16
     MIN_ITERATIONS = 2
 
     def __init__(self, **kwargs):

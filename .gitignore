@@ -1,0 +1,4 @@
+/submission/
+/results/
+*.tar.xz
+__pycache__/
