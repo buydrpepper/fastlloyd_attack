@@ -75,25 +75,27 @@ metrics_dict = {
 CONFIG = {
     'eps_range': [0, 1],
     'method_names': {
-        ("none", "laplace", "none"): "SuLloyd",
-        ("none", "gaussiananalytic", "none"): "GLloyd",
-        ("none", "none", "none"): "Lloyd",
+        # ("none", "laplace", "none"): "SuLloyd",
+        # ("none", "gaussiananalytic", "none"): "GLloyd",
+         ("none", "none", "none"): "Lloyd",
         ("diagonal_then_frac", "gaussiananalytic", "fold"): "FastLloyd",
         ("diagonal_then_frac", "averagelast", "fold"): "AvgLast",
         ("diagonal_then_frac", "project", "fold"): "Project",
         ("diagonal_then_frac", "projectlast", "fold"): "ProjectLast",
         ("diagonal_then_frac", "nofinalnoise", "fold"): "NoFinalNoise",
+        ("diagonal_then_frac", "projectlloyds", "fold"): "ProjectL",
 
     },
     "method_colors": {
-        ("none", "laplace", "none"): "red",
-        ("none", "none", "none"): "black",
-        ("none", "gaussiananalytic", "none"): "orange",
+        # ("none", "laplace", "none"): "red",
+         ("none", "none", "none"): "black",
+        # ("none", "gaussiananalytic", "none"): "orange",
         ("diagonal_then_frac", "gaussiananalytic", "fold"): "green",
         ("diagonal_then_frac", "averagelast", "fold"): "blue",
         ("diagonal_then_frac", "project", "fold"): "red",
         ("diagonal_then_frac", "projectlast", "fold"): "pink",
-        ("diagonal_then_frac", "nofinalnoise", "fold"): "orange",
+        ("diagonal_then_frac", "nofinalnoise", "fold"): "black",
+        ("diagonal_then_frac", "projectlloyds", "fold"): "orange",
     },
     'datasets_folders': [
         "submission/accuracy"
@@ -167,6 +169,7 @@ def finalize_plot(metric, folder, dataset=""):
     plt.xlabel('ε')
     plt.ylabel(metrics_dict[metric])
     plt.grid(True)
+
     plt.tight_layout()
     plt.savefig(os.path.join(folder, f"{dataset}_{metrics_dict[metric]}.pdf"), bbox_inches='tight')
     plt.clf()

@@ -1,1 +1,1 @@
-python experiments.py --exp_type "accuracy" --num_runs 10 --plot
+python experiments.py --exp_type "accuracy" --num_runs 10

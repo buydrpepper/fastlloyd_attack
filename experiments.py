@@ -23,8 +23,7 @@ from sklearn.cluster import KMeans
 from configs import Params, exp_parameter_dict, num_clusters
 from configs.defaults import accuracy_datasets
 from data_io import shuffle_and_split, unscale, load_txt, normalize
-from utils import evaluate, mean_confidence_interval, plot_clusters
-from utils.protocols import project_last_proto
+from utils import evaluate, mean_confidence_interval, plot_clusters, plot_cluster_history
 
 
 class ExperimentRunner:
@@ -74,7 +73,8 @@ class ExperimentRunner:
         self.failed_experiments = []
         # TODO: make eval metrics = nicv to save time
         self.eval_metrics = "all" if exp_type == "accuracy" or dataset in accuracy_datasets else "nicv"
-        #self.eval_metrics = "nicv"
+        # self.eval_metrics = "nicv"
+        self.eval_metrics = ["nicv", "mse"]
 
         values_unscaled = unscale(self.values.copy())
         self.centroids_gt = KMeans(n_clusters=k).fit(values_unscaled).cluster_centers_
@@ -95,30 +95,35 @@ class ExperimentRunner:
 
         # Run protocol and time it
         start = timer()
-        centroids, unassigned = self.protocol(value_lists, params)
+        centroid_history, unassigned, final_guess, canonical = self.protocol(value_lists, params)
         elapsed_time = timer() - start
 
         # Handle scaling
         values_unscaled = unscale(self.values.copy()) if params.fixed else self.values
-        centroids_final = unscale(centroids) if params.fixed else centroids
+        centroid_history = list(map(unscale, centroid_history)) if params.fixed else centroid_history
+
+        final_guess = unscale(final_guess) if params.fixed else final_guess
+
+        canonical = unscale(canonical) if params.fixed else canonical
         # Evaluate results
-        metrics = evaluate(centroids_final, values_unscaled, self.centroids_gt, self.eval_metrics)
+        metrics = evaluate(final_guess, values_unscaled, self.centroids_gt, self.eval_metrics)
         metrics["elapsed"] = elapsed_time
         metrics["unassigned"] = unassigned
 
         # Generate plots if requested
         if self.plot:
-            self._generate_plot(centroids_final, values_unscaled, params)
+            self._generate_plot(centroid_history, final_guess, canonical, values_unscaled, params)
 
         return metrics
 
-    def _generate_plot(self, centroids: np.ndarray, values: np.ndarray, params: Params) -> None:
+    def _generate_plot(self, centroid_history: List[np.ndarray], final_guess, canonical, values: np.ndarray, params: Params) -> None:
         """Generate and save clustering visualization."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = (f"{timestamp}_{params.method}_{params.dp}_{params.eps}_"
                     f"[{params.post}-{params.alpha}]_{params.seed}")
 
-        plot_clusters(centroids, values)
+        #plot_clusters(centroid_history[0], values)
+        plot_cluster_history(centroid_history, final_guess,canonical, values)
         plt.title(filename)
 
         folder = Path("results") / self.dataset / self.protocol.__name__
@@ -166,9 +171,9 @@ class ExperimentRunner:
 
         hardcoded=[ ["none", "none", "none"],
                    ["diagonal_then_frac", "gaussiananalytic", "fold"],
-                   #["diagonal_then_frac", "averagelast", "fold"],
-                   #["diagonal_then_frac", "project", "fold"],
-                   #["diagonal_then_frac", "projectlast", "fold"],
+                   ["diagonal_then_frac", "averagelast", "fold"],
+                   ["diagonal_then_frac", "project", "fold"],
+                   ["diagonal_then_frac", "projectlast", "fold"],
                    ["diagonal_then_frac", "nofinalnoise", "fold"],
                    ]
 
@@ -346,6 +351,7 @@ class ExperimentRunner:
         """
 
         patt = getattr(params, 'dp')
+
         setattr(params, 'dp', "gaussiananalytic")
 
 
@@ -353,21 +359,17 @@ class ExperimentRunner:
         proportions = np.ones(params.num_clients) / params.num_clients
         value_lists = shuffle_and_split(self.values, params.num_clients, proportions)
 
-        from utils.protocols import projection_proto, average_last_proto, no_final_noise
+        from utils.protocols import custom_proto, no_final_noise
         protocol = self.protocol
 
-        if patt == "averagelast":
-            protocol = average_last_proto
-        if patt == "project":
-            protocol = projection_proto
-        if patt == "projectlast":
-            protocol=project_last_proto
+        if "average" in patt or "project" in patt:
+            protocol = lambda value_lists, params: custom_proto(value_lists, params, patt, True)
         if patt == "nofinalnoise":
             protocol=no_final_noise
 
         # Run protocol and time it
         start = timer()
-        centroids, unassigned = protocol(value_lists, params)
+        centroid_history, unassigned, final_guess, canonical = protocol(value_lists, params)
         elapsed_time = timer() - start
 
         # reset dp attribute. The data, starting here, should not depend on it 
@@ -375,15 +377,17 @@ class ExperimentRunner:
 
         # Handle scaling
         values_unscaled = unscale(self.values.copy()) if params.fixed else self.values
-        centroids_final = unscale(centroids) if params.fixed else centroids
+        centroid_history = list(map(unscale, centroid_history)) if params.fixed else centroid_history
+        final_guess = unscale(final_guess) if params.fixed else final_guess
+        canonical = unscale(canonical) if params.fixed else canonical
         # Evaluate results
-        metrics = evaluate(centroids_final, values_unscaled, self.centroids_gt, self.eval_metrics)
+        metrics = evaluate(final_guess, values_unscaled, self.centroids_gt, self.eval_metrics)
         metrics["elapsed"] = elapsed_time
         metrics["unassigned"] = unassigned
 
         # Generate plots if requested
         if self.plot:
-            self._generate_plot(centroids_final, values_unscaled, params)
+            self._generate_plot(centroid_history, final_guess, canonical, values_unscaled, params)
 
         return metrics
 
@@ -470,6 +474,9 @@ def main() -> None:
     if exp_type in exp_parameter_dict:
         params_list.update(exp_parameter_dict[exp_type])
 
+    #Add provided datasets
+    params_list["datasets"] += args.datasets
+
     # Set up protocol and communication
     if "timing" in exp_type:
         from data_io.comm import comm
@@ -487,7 +494,6 @@ def main() -> None:
 
     # Run experiments in parallel
 
-    #EDIT: change 16 free cores to 1- Dennis
     max_processes = min(os.cpu_count()-1 or 1, len(params_list["datasets"]))
     if "timing" in exp_type:
         max_processes = 1

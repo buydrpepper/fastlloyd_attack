@@ -95,7 +95,7 @@ def mpi_proto(value_lists, params: Params, method="masked"):
         centroids = comm.bcast(client.centroids if not server_process else None, root=1)
 
     comm.print_comm_stats()
-    return to_fixed(centroids), 0
+    return [to_fixed(centroids)], 0
 
 
 
@@ -171,13 +171,19 @@ def local_proto(value_lists, params: Params, method="masked"):
         centroids = clients[0].centroids
         centroid_history.append(centroids)
 
-    return to_fixed(centroids), unassigned_last_iter
+    return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params)
 
 
+def get_lloyd_centroid(value_lists, paramref: Params, method="unmasked"):
 
-def projection_proto(value_lists, params: Params, method="unmasked"):
-    """Projects the final guess onto the median line"""
-    set_seed(params.seed)
+    params=copy(paramref)
+    setattr(params, 'dp', "none")
+    setattr(params, 'method', "none")
+    setattr(params, 'post', "none")
+    setattr(params, 'alpha', 0)
+
+    #Don't set seed
+    #set_seed(params.seed)
     cls = MaskedClient if method == "masked" else UnmaskedClient
     clients = [
         cls(client, value_lists[client], params)
@@ -214,55 +220,26 @@ def projection_proto(value_lists, params: Params, method="unmasked"):
         pbar.set_description(str(err))
         centroids = clients[0].centroids
         centroid_history.append(centroids)
-
-    if params.iters < 2:
-        return to_fixed(centroids), unassigned_last_iter
-
-    history_arr = np.array(centroid_history) 
-
-    directionlst = []
-    meanlst = []
-
-    for i in range(params.k):
-        cluster_path = history_arr[:, i, :]
-
-        data_mean = cluster_path.mean(axis=0) #dimension (dim)
-        centered_data = cluster_path - data_mean
-
-        _, _, Vh = np.linalg.svd(centered_data)
-        direction_vector = Vh[0]
-        directionlst.append(direction_vector)
-        meanlst.append(data_mean)
-
-    projected_centroids = np.zeros((params.k,params.dim))
-
-    for i in range(params.k):
-        a = meanlst[i]
-        u = centroids[i]-a
-        v = directionlst[i]
-        t = np.dot(u,v)/np.dot(v,v)
-
-        projected_centroids[i] = a + t*v
-    
-
-    return to_fixed(projected_centroids), unassigned_last_iter
+    return to_fixed(centroids)
 
 
-def project_last_proto(value_lists, params: Params, method="unmasked"):
-    """Projects using only the history tail (3 centroids)"""
-    
+def custom_proto(value_lists, params: Params, dp= "", conv=False):
+    """Projects the final guess onto the median line"""
     set_seed(params.seed)
-    cls = MaskedClient if method == "masked" else UnmaskedClient
+    cls = UnmaskedClient
     clients = [
         cls(client, value_lists[client], params)
         for client in range(params.num_clients)
     ]
     centroids = clients[0].centroids
-    centroid_history = [centroids.copy()]
+    centroid_history = [centroids] #necessary, since post processing is done
+    total_history=[]
+    count_history=[]
     server = Server(params)
     pbar = tqdm(range(params.iters))
     unassigned_last_iter = 0
 
+    err = 0
     for i in pbar:
         params.update_maxdist(i)
         # Collect statistics from all clients
@@ -288,115 +265,63 @@ def project_last_proto(value_lists, params: Params, method="unmasked"):
         pbar.set_description(str(err))
         centroids = clients[0].centroids
         centroid_history.append(centroids)
+        total_history.append(total)
+        count_history.append(count)
 
-    if params.iters < 2:
-        return to_fixed(centroids), unassigned_last_iter
+    # with open("error" + str(params.eps), "a") as f:
+    #      f.write(str(err) + "\n")
+    if conv:
+        if False and ((params.eps == 0.1 and err >= 0.675339*0.75) or
+            (params.eps == 0.25 and err >= 0.517732*0.75) or
+            (params.eps == 0.5 and err >= 0.403405*0.75) or
+            (params.eps == 0.75 and err >= 0.199732*0.75) or
+            (params.eps == 1 and err >= 0.153413*0.75)):
 
-    history_arr = np.array(centroid_history) 
-    history_arr = history_arr[-3:]
+            return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params)
 
-    directionlst = []
-    meanlst = []
-
-    for i in range(params.k):
-        cluster_path = history_arr[:, i, :]
-
-        data_mean = cluster_path.mean(axis=0) #dimension (dim)
-        centered_data = cluster_path - data_mean
-
-        _, _, Vh = np.linalg.svd(centered_data)
-        direction_vector = Vh[0]
-        directionlst.append(direction_vector)
-        meanlst.append(data_mean)
-
-    projected_centroids = np.zeros((params.k,params.dim))
-
-    for i in range(params.k):
-        a = meanlst[i]
-        u = centroids[i]-a
-        v = directionlst[i]
-        t = np.dot(u,v)/np.dot(v,v)
-
-        projected_centroids[i] = a + t*v
-    
-
-    return to_fixed(projected_centroids), unassigned_last_iter
+        if False:
+            return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params)
 
 
-def average_last_proto(value_lists, params: Params, method="unmasked"):
-    """Averages the history tail (2 items)
-    
-    This protocol simulates federated clustering in a single process, useful for
-    testing and development. It maintains separate client and server instances
-    in memory and simulates their interaction. Like the MPI protocol, it supports
-    both masked and unmasked computation.
-    
-    The protocol follows these steps in each iteration:
-    1. Each client computes local statistics
-    2. The server aggregates these statistics
-    3. Clients update their centroids using the aggregated statistics
-    4. Progress is tracked through centroid movement
-    
-    The implementation also tracks the number of unassigned points (points too
-    far from any centroid)
-    
-    Args:
-        value_lists (list): List of numpy arrays, where each array contains the data
-                           points for one client
-        params (Params): Configuration parameters for the clustering algorithm
-        method (str, optional): Either "masked" for privacy-preserving computation
-                              or "unmasked" for standard computation. Defaults to "masked"
-    
-    Returns:
-        tuple: A tuple containing:
-            - np.ndarray: Final cluster centroids after all iterations
-            - int: Number of points not assigned to any cluster in the final iteration
-            
-    Note:
-        - Progress bar shows the Euclidean norm of centroid movement between iterations
-        - All clients maintain identical centroids due to synchronized updates
-        - A history of centroids is maintained but not returned
-    """
-    set_seed(params.seed)
-    cls = MaskedClient if method == "masked" else UnmaskedClient
-    clients = [
-        cls(client, value_lists[client], params)
-        for client in range(params.num_clients)
-    ]
-    centroids = clients[0].centroids
-    centroid_history = [centroids.copy()]
-    server = Server(params)
-    pbar = tqdm(range(params.iters))
-    unassigned_last_iter = 0
+    if "project" in dp:
+        if params.iters < 2:
+            return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params)
 
-    for i in pbar:
-        params.update_maxdist(i)
-        # Collect statistics from all clients
-        totals = []
-        counts = []
-        unassigneds = []
-        for client in clients:
-            total, count, unassigned = client.step(params)
-            totals.append(total)
-            counts.append(count)
-            unassigneds.append(unassigned)
-        unassigned_last_iter = sum(unassigneds)
+        history_arr = np.array(centroid_history) 
+        if "last" in dp:
+            history_arr = history_arr[-3:]
 
-        # Server processes aggregated statistics
-        total, count = server.step(totals, counts, params)
+        directionlst = []
+        meanlst = []
 
-        # Update all clients
-        for client in clients:
-            client.update(total, count)
+        for i in range(params.k):
+            cluster_path = history_arr[:, i, :]
 
-        # Track progress through centroid movement
-        err = np.linalg.norm(clients[0].centroids - centroids)
-        pbar.set_description(str(err))
-        centroids = clients[0].centroids
-        centroid_history.append(centroids)
-    if params.iters <= 0:
-        return to_fixed(centroids), unassigned_last_iter
-    return to_fixed((centroids+centroid_history[-2])/2), unassigned_last_iter
+            data_mean = cluster_path.mean(axis=0) #dimension (dim)
+            centered_data = cluster_path - data_mean
+
+            _, _, Vh = np.linalg.svd(centered_data)
+            direction_vector = Vh[0]
+            directionlst.append(direction_vector)
+            meanlst.append(data_mean)
+
+        projected_centroids = np.zeros((params.k,params.dim))
+
+        for i in range(params.k):
+            a = meanlst[i]
+            u = centroids[i]-a
+            v = directionlst[i]
+            t = np.dot(u,v)/np.dot(v,v)
+
+            projected_centroids[i] = a + t*v
+
+        return list(map(to_fixed, centroid_history)), unassigned_last_iter,to_fixed(projected_centroids), get_lloyd_centroid(value_lists, params)
+
+
+    elif "average" in dp:
+        return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed((centroids+centroid_history[-2])/2) if params.iters>0 else to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params)
+    else:
+        sys.exit()
 
 def no_final_noise(value_lists, params: Params, method="masked"):
     """Same as local, no noise on final iterate"""
@@ -445,4 +370,5 @@ def no_final_noise(value_lists, params: Params, method="masked"):
         centroids = clients[0].centroids
         centroid_history.append(centroids)
 
-    return to_fixed(centroids), unassigned_last_iter
+    return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params)
+
