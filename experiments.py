@@ -79,7 +79,7 @@ class ExperimentRunner:
         values_unscaled = unscale(self.values.copy())
         self.centroids_gt = KMeans(n_clusters=k).fit(values_unscaled).cluster_centers_
 
-    def run_single_protocol(self, params: Params) -> Dict[str, float]:
+    def run_single_protocol(self, params: Params) -> tuple[Dict[str, float],Any]:
         """
         Run a single instance of the clustering protocol.
 
@@ -87,7 +87,8 @@ class ExperimentRunner:
             params: Parameters for this protocol run
 
         Returns:
-            Dictionary of evaluation metrics
+            (Dictionary of evaluation metrics, extra)
+            
         """
         # Prepare data
         proportions = np.ones(params.num_clients) / params.num_clients
@@ -95,13 +96,22 @@ class ExperimentRunner:
 
         # Run protocol and time it
         start = timer()
-        centroid_history, unassigned, final_guess, canonical = self.protocol(value_lists, params)
+        centroid_history, unassigned, final_guess, canonical, *sum_count_history = self.protocol(value_lists, params)
+
+        if len(sum_count_history)== 1:
+            sum_count_history = sum_count_history[0]
+
+
         elapsed_time = timer() - start
 
         # Handle scaling
         values_unscaled = unscale(self.values.copy()) if params.fixed else self.values
         centroid_history = list(map(unscale, centroid_history)) if params.fixed else centroid_history
+        if params.fixed:
+            sum_count_history = [[[ unscale(x) for x in lst] for lst in tup] for tup in sum_count_history]
 
+        #NOTE: For some reason, this breaks everything
+        #NOTE: ^^ I have no idea why i wrote this
         final_guess = unscale(final_guess) if params.fixed else final_guess
 
         canonical = unscale(canonical) if params.fixed else canonical
@@ -114,7 +124,7 @@ class ExperimentRunner:
         if self.plot:
             self._generate_plot(centroid_history, final_guess, canonical, values_unscaled, params)
 
-        return metrics
+        return metrics, sum_count_history
 
     def _generate_plot(self, centroid_history: List[np.ndarray], final_guess, canonical, values: np.ndarray, params: Params) -> None:
         """Generate and save clustering visualization."""
@@ -169,6 +179,7 @@ class ExperimentRunner:
 
         #order: method, dp, post
 
+        #This variable is set by the user
         hardcoded=[ ["none", "none", "none"],
                    ["diagonal_then_frac", "gaussiananalytic", "fold"],
                    ["diagonal_then_frac", "averagelast", "fold"],
@@ -176,6 +187,10 @@ class ExperimentRunner:
                    ["diagonal_then_frac", "projectlast", "fold"],
                    ["diagonal_then_frac", "nofinalnoise", "fold"],
                    ]
+
+        # Gen (centroid, counts) only for Fastlloyd and Lloyd
+        if self.exp_type == "reconstruction":
+            hardcoded = [ ["none", "none", "none"], ["diagonal_then_frac", "gaussiananalytic", "fold"]]
 
         for method, dp, post in hardcoded:
             for eps_budget in self._get_eps_budgets(dp):
@@ -213,7 +228,36 @@ class ExperimentRunner:
         for seed in self.params_list["seeds"]:
             params.seed = seed
             try:
-                metrics = self.run_single_protocol(params)
+                metrics,_= self.run_single_protocol(params)
+
+                for metric, value in metrics.items():
+                    total_metrics[metric].append(value)
+
+                failed = any(np.isnan(value) for value in metrics.values())
+                successful_experiments += 1 if not failed else 0
+                experiment_count += 1
+
+            except Exception as e:
+                print(f"Experiment failed: {str(e)}")
+                self.failed_experiments.append(vars(params))
+                self._save_results()
+
+        # Process and save results
+        self._process_and_save_results(
+            params, total_metrics, successful_experiments, experiment_count
+        )
+
+    def run_and_release_data(self, params: Params) -> None:
+        """Run experiment with given parameters multiple times, then return the released data"""
+        params.calculate_iters()
+        total_metrics = defaultdict(list)
+        successful_experiments = experiment_count = 0
+
+        # Run multiple times with different seeds
+        for seed in self.params_list["seeds"]:
+            params.seed = seed
+            try:
+                metrics, sumcountarr= self.run_single_protocol(params)
 
                 for metric, value in metrics.items():
                     total_metrics[metric].append(value)
@@ -298,7 +342,10 @@ class ExperimentRunner:
         """Run all experiments with different parameter combinations."""
         for params in self._get_parameter_combinations():
 
-            if getattr(params, 'dp') != "gaussiananalytic" and getattr(params, 'dp') != "lapalace" and getattr(params,'dp') != "none":
+            if self.exp_type == "reconstruction":
+
+                self.run_and_release_data(params)
+            elif getattr(params, 'dp') != "gaussiananalytic" and getattr(params, 'dp') != "lapalace" and getattr(params,'dp') != "none":
                 self.run_custom_fastlloyd(params)
             else:
                 self.run_experiment(params)

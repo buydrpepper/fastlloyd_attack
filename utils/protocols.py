@@ -125,13 +125,16 @@ def local_proto(value_lists, params: Params, method="masked"):
     
     Returns:
         tuple: A tuple containing:
-            - np.ndarray: Final cluster centroids after all iterations
+            - list: a list containing the centroid history in fixed point
             - int: Number of points not assigned to any cluster in the final iteration
+            - np.ndarray: the centroids in the final iteration
+            - np.ndarray: the return value of lloyd's algorithm applied to the data
+            - list: a list containing tuples (total, count), of types list(np.ndarray (k, d))
+
             
     Note:
         - Progress bar shows the Euclidean norm of centroid movement between iterations
         - All clients maintain identical centroids due to synchronized updates
-        - A history of centroids is maintained but not returned
     """
     set_seed(params.seed)
     cls = MaskedClient if method == "masked" else UnmaskedClient
@@ -144,6 +147,7 @@ def local_proto(value_lists, params: Params, method="masked"):
     server = Server(params)
     pbar = tqdm(range(params.iters))
     unassigned_last_iter = 0
+    total_and_count_history = [([],[])]
 
     for i in pbar:
         params.update_maxdist(i)
@@ -157,9 +161,10 @@ def local_proto(value_lists, params: Params, method="masked"):
             counts.append(count)
             unassigneds.append(unassigned)
         unassigned_last_iter = sum(unassigneds)
-
+        total_and_count_history[len(total_and_count_history)-1]=(totals,counts)
         # Server processes aggregated statistics
         total, count = server.step(totals, counts, params)
+        total_and_count_history.append((totals,counts))
 
         # Update all clients
         for client in clients:
@@ -171,7 +176,7 @@ def local_proto(value_lists, params: Params, method="masked"):
         centroids = clients[0].centroids
         centroid_history.append(centroids)
 
-    return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params)
+    return list(map(to_fixed, centroid_history)), unassigned_last_iter, to_fixed(centroid_history[-1]), get_lloyd_centroid(value_lists, params), total_and_count_history
 
 
 def get_lloyd_centroid(value_lists, paramref: Params, method="unmasked"):

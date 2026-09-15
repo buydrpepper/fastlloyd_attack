@@ -82,6 +82,15 @@ ablation_parameters = {
                1.3, 1.4, 1.5, 1.6, 1.7, 1.75, 1.8, 1.9, 2.0],
 }
 
+#same as accuracy
+reconstruction_parameters = {
+    "dps": ["none", "laplace", "gaussiananalytic"],  # Privacy mechanisms
+    "methods": ["none", "diagonal_then_frac"],  # Constraint methods
+    "eps_budgets": [0.1, 0.25, 0.5, 0.75, 1],  # Privacy budgets
+    "posts": ["none", "fold"],  # Post-processing methods
+    "datasets": accuracy_datasets,  # Datasets to use
+}
+
 # Number of clusters for each dataset
 num_clusters = {
     # Real-world datasets
@@ -107,4 +116,5 @@ exp_parameter_dict = {
     "accuracy": acc_parameters,  # Accuracy experiments
     "ablation": ablation_parameters,  # Maximum distance ablation study
     "scale": scale_parameters,  # Scaling experiments
+    "reconstruction": reconstruction_parameters
 }
